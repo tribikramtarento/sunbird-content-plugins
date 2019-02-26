@@ -12,7 +12,7 @@
             "id": "videoPlugin",
             "category": "main",
             "type": "icon",
-            "toolTip": "Add Video", 
+            "toolTip": "Add Video",
             "title": "Add Video",
             "iconClass": "fa fa-play-circle-o",
             "iconStyle": "",
@@ -25,7 +25,9 @@
         },
         { "type": "js", "src": "editor/libs/video.js" },
         { "type": "js", "src": "editor/libs/videoyoutube.js" },
-        {"type": "css", "src": "editor/libs/videojs.css"}],
+        { "type": "css", "src": "editor/libs/videojs.css"},
+        { "type": "css", "src": "editor/libs/fine-uploader-new.min.css" },
+        { "type": "js", "src": "editor/libs/jquery.fine-uploader.min.js" }],
         "views":[
             {"template":"./video.html", "controller":"./videoapp.js"}
         ],

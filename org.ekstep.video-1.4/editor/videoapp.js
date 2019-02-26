@@ -1,9 +1,11 @@
 'use strict';
+var fileUploader;
 angular.module('videoApp', [])
     .controller('videoCtrl', ['$scope', '$injector', 'instance', function ($scope, $injector, instance) {
         var ctrl = this;
         ctrl.videoUrl = '';
         ctrl.show = 'message';
+        ctrl.contentService = ecEditor.getService(ServiceConstants.CONTENT_SERVICE);
         ctrl.messageDiv = true;
         ctrl.maxLimit = 1000;
         ctrl.videoLibraryTabElement = "";
@@ -14,7 +16,11 @@ angular.module('videoApp', [])
         ctrl.offsetInc = 200;
         ctrl.loadMoreAssetSpinner = false;
         ctrl.showLoadMoreWarningMsg = false;
+        ctrl.showSearchBar = true;
         ctrl.showAddLessonBtn = false;
+        ctrl.customVideoEntered = false;
+        ctrl.asset = {}
+        ctrl.asset.id = '';
         ctrl.maxVideoSize =  ecEditor.getContext('videoMaxSize') || 50;
         ctrl.videoSizeInBytes = parseInt(ctrl.maxVideoSize * 1024 * 1024);
         ctrl.previewMessages = {
@@ -26,6 +32,9 @@ angular.module('videoApp', [])
             loadingState: 'Loading Video...',
             fileExceed: 'Video file size is exceeded'
         }
+        ctrl.assetMeta = {
+            'requiredField': '',
+        };
         ctrl.isPreviewPlaying = false;
         function hideLoader() {
             ctrl.loading = '';
@@ -34,6 +43,8 @@ angular.module('videoApp', [])
         function showLoader() {
             ctrl.loading = 'active';
         }
+        showLoader();
+        instance.getYoutube(undefined, ctrl.limit, ctrl.offset = 0, getYoutubeCb);
 
 
         function getYoutubeCb(err, res) {
@@ -58,13 +69,230 @@ angular.module('videoApp', [])
             ctrl.previewHandler();
             ctrl.toastManager('message', true, false, ctrl.previewMessages.emptyState);
         }
-        ctrl.videoLibraryTab = function () {
+        ctrl.libraryTab =  function(){
+            // $('#qq-template-validation').remove();
+        }
+        ctrl.detectMimeType = function(fileName) {
+            var extn = fileName.split('.').pop()
+            switch (extn) {
+                case 'mp4':
+                    return 'video/mp4';
+                case 'webm':
+                    return 'video/webm';
+                default:
+                   return null
+            }
+        }
+        ctrl.videoResourcesTab = function () {
             ctrl.previewHandler();
             ecEditor.jQuery("#" + ctrl.videoLibraryTabElement).unbind('scroll').scroll(ctrl.bindScroll);
             ctrl.showLoadMoreWarningMsg = false;
             showLoader();
             instance.getYoutube(undefined, ctrl.limit, ctrl.offset = 0, getYoutubeCb);
+            // $('#qq-template-validation').remove();
+        }
+        ctrl.uploadVideoTab = function(){
+            if(!ctrl.customVideoEntered){
+                ecEditor.jQuery('.field', '#hideShowFields').addClass('disabled');
+            }
+            $scope.uploader = new qq.FineUploader({
+                element: document.getElementById("upload-content-div"),
+                template: 'qq-template-validation',
+                request: {
+                    endpoint: '/server/uploads'
+                },
+                autoUpload: false,
+                multiple: false,
+                validation: {
+                    allowedExtensions: ['mp4','webm'],
+                    itemLimit: 1,
+                    sizeLimit: 52428800 // 50 MB = 50 * 1024 * 1024 bytes
+                },
+                messages:{
+                    sizeError: "{file} is too large, maximum file size is 50MB."
+                },
+                callbacks: {
+                    onStatusChange: function(id, oldStatus, newStatus) {
+                        if (newStatus === 'canceled') {
+                            $scope.showLoader(false);
+                            $('#qq-upload-actions').show();
+                            $("#url-upload").show();
+                            $scope.uploader.reset();
+                            $("#orLabel").show();
+                        }
+                        if (newStatus === 'rejected') {
+                            $scope.uploader.reset();
+                        }
+                    },
+                    onSubmit: function(id, name){
+                        console.log('ONSUBMIT',  id, name);
+                        ctrl.uploadCustomVideo();
 
+                    },
+                    onAllComplete: function(succeeded, failed){
+                        console.log(succeeded, failed);
+                    },
+                    onError: function(id, name, errorReason){
+                        console.log('ON ERROR',errorReason);
+                        ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                            message: errorReason,
+                            position: 'topCenter',
+                            icon: 'fa fa-warning'
+                        });
+                    }
+                },
+                showMessage: function(messages) {
+                    console.info(" hiding the alert messages from fine uploader", messages);
+                }
+            });
+            ecEditor.getService('language').getLanguages(function(err, resp) {
+                if (!err && resp.data && resp.data.result && ecEditor._.isArray(resp.data.result.languages)) {
+                    var assetlanguages = {};
+                    ecEditor._.forEach(resp.data.result.languages, function(lang) {
+                        assetlanguages[lang.code] = lang.name;
+                    });
+                    ctrl.assetMeta.language = ecEditor._.values(assetlanguages);
+                    $scope.$safeApply();
+                }
+            });
+            // $('#qq-template-validation').remove();
+            fileUploader = $scope.uploader;
+        }
+
+        ctrl.uploadCustomVideo = function(){
+
+            ctrl.customVideoEntered = true;
+            if($scope.uploader.getFile(0) == null){
+                ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                    message: 'URL or File is required to upload',
+                    position: 'topCenter',
+                    icon: 'fa fa-warning'
+                });
+                return;
+            }
+            else{
+                ctrl.preFillForm($scope.uploader.getFile(0));
+                var fileUpload = true;
+                var mimeType = ctrl.detectMimeType($scope.uploader.getName(0))
+                if(!mimeType){
+                    ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                        message: 'Invalid content type (supported type: mp4, webm)',
+                        position: 'topCenter',
+                        icon: 'fa fa-warning'
+                    });
+                    return;
+                }
+                else{
+                    ctrl.createNewContent(fileUpload, mimeType);
+                }
+            }
+        }
+
+        ctrl.createNewContent =  function(fileUpload, mimeType){
+            console.log(fileUpload, mimeType);
+            var data = {
+                request : {
+                    content: {
+                        "name" : ctrl.assetMeta.name,
+                        "code": UUID(),
+                        "mimeType": mimeType,
+                        "creator": ctrl.assetMeta.creator,
+                        "createdBy": ecEditor.getContext('user').id,
+                        "mediaType": "video",
+                        "contentType": "Asset",
+                        "osId": "org.ekstep.quiz.app",
+                        "license": ctrl.assetMeta.license,
+                        "language": ["English"],
+                        "framework": ecEditor.getContext('framework'),
+                        "organisation":ecEditor._.values(ecEditor.getContext('user').organisations)
+                    }
+                }
+            }
+
+            ctrl.contentService.createContent(data, function(err, res){
+                if(err){
+                    ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                        message: 'Unable to create content!',
+                        position: 'topCenter',
+                        icon: 'fa fa-warning'
+                    });
+                }else{
+                    var result = res.data.result;
+                    ctrl.asset.id = result.node_id
+                    ctrl.getPresignedURL(ctrl.asset.id,mimeType, $scope.uploader.getName(0));
+                }
+            })
+        }
+        ctrl.uploadAsset = function(fileUrl, mimeType){
+            var data = new FormData();
+            data.append("fileUrl", fileUrl);
+            data.append("mimeType", mimeType);
+            var config  = {
+                enctype: 'multipart/form-data',
+                processData: false,
+                contentType: false,
+                cache: false
+            }
+            ctrl.contentService.uploadContent(ctrl.asset.id, data, config, function(err, res) {
+                if(err){
+                    ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                        message: 'Unable to upload content!',
+                        position: 'topCenter',
+                        icon: 'fa fa-warning'
+                    });
+                } else{
+                    ecEditor.dispatchEvent("org.ekstep.toaster:success", {
+                        title: 'content uploaded successfully!',
+                        position: 'topCenter',
+                        icon: 'fa fa-check-circle'
+                    });
+                    console.log('CONTENT FINALLY UPLOADED')
+                }
+            })
+        }
+        ctrl.getPresignedURL =  function(contentID,mimeType,fileName){
+            ctrl.contentService.getPresignedURL(contentID, fileName, function(err, res){
+                if(err){
+                    ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                        message: 'error while uploading!',
+                        position: 'topCenter',
+                        icon: 'fa fa-warning'
+                    });
+                } else {
+                    var signedURL =  res.data.result.pre_signed_url;
+                    var config = {
+                        processData: false,
+                        contentType: mimeType,
+                        headers: {
+                            'x-ms-blob-type': 'BlockBlob'
+                        }
+                    }
+                    ctrl.uploadtoPresignedURL(signedURL, $scope.uploader.getFile(0), config, mimeType);
+                }
+            })
+        }
+        ctrl.uploadtoPresignedURL =  function(url, file, config, mimeType){
+            ctrl.contentService.uploadDataToSignedURL(url,file,config, function(err, res){
+                if(err){
+                    ecEditor.dispatchEvent("org.ekstep.toaster:error", {
+                        message: 'error while uploading!',
+                        position: 'topCenter',
+                        icon: 'fa fa-warning'
+                    });
+                } else {
+                    ctrl.uploadAsset(url.split('?')[0], mimeType);
+                }
+            })
+        }
+        ctrl.preFillForm = function(file){
+            ecEditor.jQuery('.field', '#hideShowFields').removeClass('disabled');
+            ctrl.assetMeta.name = file.name.replace(/\.[^/.]+$/, "").replace(/[_.^/_]/g, " ");
+            ctrl.assetMeta.creator = ecEditor.getContext('user').name;
+            ecEditor.ngSafeApply(ecEditor.getAngularScope());
+        }
+        ctrl.setVideoLicense =  function(license){
+            console.log("LICENSE",license);
+            ctrl.assetMeta.license = (license) ? "Creative Commons Attribution (CC BY)" : ''
         }
         ctrl.previewHandler = function(){
             if(ctrl.isPreviewPlaying && ctrl.provider ==='youtube'){
@@ -257,9 +485,9 @@ angular.module('videoApp', [])
                 }
 
                 });
-            
+
         }
-        ctrl.previewVideo = function () {            
+        ctrl.previewVideo = function () {
             ctrl.messageDiv = true;
             ctrl.show = 'loader';
             var link = ctrl.videoUrl;
@@ -280,10 +508,21 @@ angular.module('videoApp', [])
         };
         setTimeout(function () {
             ctrl.videoLibraryTabElement = "video-library-tab";
-            ecEditor.jQuery('.video-modal .menu .item').tab();
+            ecEditor.jQuery('.video-modal .menu .item').tab({
+                onVisible: function(event, ui) {
+                    console.log(event)
+                    if(event=== 'libraryTab'){
+                        ctrl.showSearchBar =  true
+                    }
+                    else{
+                        ctrl.showSearchBar = false;
+                    }
+                    $scope.$safeApply();
+                }
+            });
             ctrl.bindScroll = function (data) {
                 console.log("tabswithced");
-                
+
                 var a = ecEditor.jQuery("#" + data.target.id);
                 var b = ecEditor.jQuery("#" + data.target.id)[0];
                 if (a.scrollTop() + a.height() + 40 >= b.scrollHeight) {
@@ -339,5 +578,6 @@ angular.module('videoApp', [])
                 "stage": ecEditor.getCurrentStage().id
             })
         }
+
     }]);
 //# sourceURL=videopluginapp.js
